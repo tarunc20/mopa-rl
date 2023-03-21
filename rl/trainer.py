@@ -16,6 +16,7 @@ import gym
 from gym import spaces
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
+from rl.robosuite_env import Lift
 
 from rl.policies import get_actor_critic_by_name
 from rl.rollouts import RolloutRunner
@@ -25,6 +26,60 @@ from util.pytorch import get_ckpt_path, count_parameters, to_tensor
 from util.mpi import mpi_sum
 from util.gym import observation_size, action_size
 from util.misc import make_ordered_pair
+import robosuite as suite
+
+def make_standard_environment():
+    expl_environment_kwargs = {
+            "control_freq": 20,
+            "controller_configs": {
+            "control_delta": True,
+            "damping": 1,
+            "damping_limits": [
+                0,
+                10
+            ],
+            "impedance_mode": "fixed",
+            "input_max": 1,
+            "input_min": -1,
+            "interpolation": None,
+            "kp": 150,
+            "kp_limits": [
+                0,
+                300
+            ],
+            "orientation_limits": None,
+            "output_max": [
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+                0.5,
+            ],
+            "output_min": [
+                -0.5,
+                -0.5,
+                -0.5,
+                -0.5,
+                -0.5,
+                -0.5,
+            ],
+            "position_limits": None,
+            "ramp_ratio": 0.2,
+            "type": "OSC_POSE",
+            "uncouple_pos_ori": True
+            },
+            "env_name": "Lift",
+            "horizon": 250,
+            # "ignore_done": True,
+            "reward_shaping": True,
+            "robots": "Panda",
+            "use_object_obs": True,
+            "camera_names":"frontview"
+        }
+    env = suite.make(**expl_environment_kwargs)
+    return env
+        
 
 
 def get_agent_by_name(algo):
@@ -42,38 +97,75 @@ def get_agent_by_name(algo):
 
 class Trainer(object):
     def __init__(self, config):
+        config._vis_replay = False # remove later
+        config.run_name += str(time())
         self._config = config
         self._is_chef = config.is_chef
 
         # create a new environment
-        self._env = gym.make(config.env, **config.__dict__)
-        self._env_eval = (
-            gym.make(config.env, **copy.copy(config).__dict__)
-            if self._is_chef
-            else None
-        )
-        self._config._xml_path = self._env.xml_path
+        if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+            self._env = gym.make(config.env, **config.__dict__)
+            self._env_eval = (
+                gym.make(config.env, **copy.copy(config).__dict__)
+                if self._is_chef
+                else None
+            )
+        elif config.env == "Lift":
+            # self._env = Lift(**config.__dict__)
+            # self._env_eval = (
+            #     Lift(**config.__dict__)
+            #     if self._is_chef
+            #     else None
+            # )
+            self._env = make_standard_environment()
+            self._env_eval = make_standard_environment()
+        else:
+            self._env = gym.make(config.env)
+            self._env_eval = gym.make(config.env)
+        try:
+            self._config._xml_path = self._env.xml_path
+        except:
+            pass
         config.nq = self._env.sim.model.nq
-
-        ob_space = self._env.observation_space
-        ac_space = self._env.action_space
-        joint_space = self._env.joint_space
+        # fix this for half cheetah
+        try:
+            ob_space = self._env.observation_space
+            ac_space = self._env.action_space
+        except: # case of Lift environment
+            true_ob_space = spaces.Box(low=-1*np.ones(42), high=np.ones(42))
+            true_ac_space = spaces.Box(low=-1*np.ones(7), high=np.ones(7))
+            ob_space = spaces.Dict({'default': true_ob_space})
+            ac_space = spaces.Dict({'default': true_ac_space})
+            self._env.observation_space = ob_space
+            self._env.action_space = ac_space
+            self._env_eval.ob_space = ob_space 
+            self._env_eval.ac_space = ac_space
+        if config.env == "HalfCheetah-v2":
+            ob_space = spaces.Dict({'default': ob_space})
+            ac_space = spaces.Dict({'default': ac_space})
+        try:
+            joint_space = self._env.joint_space
+        except:
+            # case of half cheetah environment and lift environment
+            joint_space = None
+            self._env.joint_space = None
 
         allowed_collsion_pairs = []
-        for manipulation_geom_id in self._env.manipulation_geom_ids:
-            for geom_id in self._env.static_geom_ids:
-                allowed_collsion_pairs.append(
-                    make_ordered_pair(manipulation_geom_id, geom_id)
-                )
-
+        if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+            for manipulation_geom_id in self._env.manipulation_geom_ids:
+                for geom_id in self._env.static_geom_ids:
+                    allowed_collsion_pairs.append(
+                        make_ordered_pair(manipulation_geom_id, geom_id)
+                    )
         ignored_contact_geom_ids = []
-        ignored_contact_geom_ids.extend(allowed_collsion_pairs)
-        config.ignored_contact_geom_ids = ignored_contact_geom_ids
+        if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+            ignored_contact_geom_ids.extend(allowed_collsion_pairs)
+            config.ignored_contact_geom_ids = ignored_contact_geom_ids
 
         passive_joint_idx = list(range(len(self._env.sim.data.qpos)))
-        [passive_joint_idx.remove(idx) for idx in self._env.ref_joint_pos_indexes]
+        if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+            [passive_joint_idx.remove(idx) for idx in self._env.ref_joint_pos_indexes]
         config.passive_joint_idx = passive_joint_idx
-
         # get actor and critic networks
         actor, critic = get_actor_critic_by_name(config.policy)
 
@@ -86,6 +178,7 @@ class Trainer(object):
         sampler = None
 
         ll_ob_space = ob_space
+        
         if config.mopa:
             if config.discrete_action:
                 ac_space.spaces["ac_type"] = spaces.Discrete(2)
@@ -142,14 +235,12 @@ class Trainer(object):
             actor,
             critic,
             non_limited_idx,
-            self._env.ref_joint_pos_indexes,
+            None if config.env == "HalfCheetah-v2" or config.env == "Lift" else self._env.ref_joint_pos_indexes,
             self._env.joint_space,
-            self._env._is_jnt_limited,
-            self._env.jnt_indices,
+            None if config.env == "HalfCheetah-v2" or config.env == "Lift" else self._env._is_jnt_limited,
+            None if config.env == "HalfCheetah-v2" or config.env == "Lift" else self._env.jnt_indices,
         )
-
         self._agent._ac_space.seed(config.seed)
-
         self._runner = None
         if config.mopa:
             self._runner = MoPARolloutRunner(
@@ -157,8 +248,12 @@ class Trainer(object):
             )
         else:
             self._runner = RolloutRunner(config, self._env, self._env_eval, self._agent)
-
         # setup wandb
+        # set wandb to be true
+        self._config.wandb = True
+        config.entity = "tchiruvolu"
+        config.project = "moparl_tests"
+        config.reward_type = "standard"
         if self._is_chef and self._config.is_train and self._config.wandb:
             exclude = ["device"]
             if config.debug:
@@ -240,6 +335,7 @@ class Trainer(object):
                 step=step,
             )
         if self._config.vis_replay:
+            return
             if step % self._config.vis_replay_interval == 0:
                 self._vis_replay_buffer(step)
 
@@ -258,6 +354,7 @@ class Trainer(object):
 
     def train(self):
         config = self._config
+        # unused
         num_batches = config.num_batches
 
         # load checkpoint
@@ -288,6 +385,8 @@ class Trainer(object):
 
         init_step = 0
         init_ep = 0
+        # set config start steps to low
+        #self._config.start_steps = 1000
         # If it does not previously learned data and use SAC, then we firstly fill the experieince replay with the specified number of samples
         if step == 0:
             if random_runner is not None:
@@ -378,12 +477,13 @@ class Trainer(object):
         vids = []
         for i in range(self._config.num_record_samples):
             rollout, info, frames = self._runner.run_episode(
-                is_train=False, record=record
+                is_train=False, record=record, max_step=1000
             )
 
             if record:
                 ep_rew = info["rew"]
-                ep_success = "s" if info["episode_success"] else "f"
+                #ep_success = "s" if info["episode_success"] else "f"
+                ep_success = 's'
                 fname = "{}_step_{:011d}_{}_r_{}_{}.mp4".format(
                     self._config.env,
                     step,

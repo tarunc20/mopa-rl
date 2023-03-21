@@ -16,7 +16,10 @@ class MoPARolloutRunner(object):
         self._config = config
         self._env = env
         self._env_eval = env_eval
-        self._ik_env = gym.make(config.env, **config.__dict__)
+        try:
+            self._ik_env = gym.make(config.env, **config.__dict__)
+        except:
+            self._ik_env = None
         self._pi = pi
 
     def run(
@@ -77,9 +80,7 @@ class MoPARolloutRunner(object):
                     return_stds=True,
                     random_exploration=random_exploration,
                 )
-
                 curr_qpos = env.sim.data.qpos.copy()
-                prev_qpos = env.sim.data.qpos.copy()
                 target_qpos = curr_qpos.copy()
                 prev_ob = ob.copy()
                 is_planner = False
@@ -128,7 +129,6 @@ class MoPARolloutRunner(object):
                         ] = tmp_target_qpos[
                             np.invert(env._is_jnt_limited[env.jnt_indices])
                         ]
-
                     # Invalid target joint state handling
                     if config.invalid_target_handling and not pi.isValidState(
                         target_qpos
@@ -141,14 +141,12 @@ class MoPARolloutRunner(object):
                             d = curr_qpos - target_qpos
                             target_qpos += config.step_size * d / np.linalg.norm(d)
                             trial += 1
-
                     if pi.isValidState(target_qpos):
                         traj, success, interpolation, valid, exact = pi.plan(
                             curr_qpos, target_qpos, ac_scale=env._ac_scale
                         )
                     else:
                         success, valid, exact = False, False, True
-
                     if success:
                         if interpolation:
                             counter["interpolation"] += 1
@@ -201,6 +199,8 @@ class MoPARolloutRunner(object):
                             reward_info.add(info)
                             if done or ep_len >= max_step:
                                 break
+                        # print(f"True delta: {env.env.sim.data.qpos}")
+                        # print(f"True delta: {env.sim.data.qpos}")
                         rollout.add(
                             {
                                 "ob": prev_ob,
@@ -218,7 +218,6 @@ class MoPARolloutRunner(object):
                             ep_info.add({"env_step": env_step})
                             env_step = 0
                             yield rollout.get(), ep_info.get_dict(only_scalar=True)
-
                         # Resample the trajectory from motion planner
                         if config.reuse_data and len(ob_list) > 3:
                             pairs = []
@@ -300,7 +299,6 @@ class MoPARolloutRunner(object):
                                         yield rollout.get(), ep_info.get_dict(
                                             only_scalar=True
                                         )
-
                     else:  # Failure in motion planner
                         if not exact:
                             counter["approximate"] += 1
@@ -372,7 +370,7 @@ class MoPARolloutRunner(object):
                         env_step = 0
                         yield rollout.get(), ep_info.get_dict(only_scalar=True)
 
-                env._reset_prev_state()
+                # env._reset_prev_state() commented out for now
             ep_info.add({"len": ep_len, "rew": ep_rew})
             if counter["mp"] > 0:
                 ep_info.add({"mp_path_len": mp_path_len / counter["mp"]})
@@ -385,6 +383,7 @@ class MoPARolloutRunner(object):
                 )
             ep_info.add(counter)
             reward_info_dict = reward_info.get_dict(reduction="sum", only_scalar=True)
+            print(f"reward info dict: {reward_info_dict}")
             ep_info.add(reward_info_dict)
             logger.info(
                 "Ep %d rollout: %s %s",
@@ -396,6 +395,7 @@ class MoPARolloutRunner(object):
                 },
                 {k: v for k, v in counter.items()},
             )
+            print(f"Length of episode: {env._episode_length}")
             episode += 1
 
     def run_episode(

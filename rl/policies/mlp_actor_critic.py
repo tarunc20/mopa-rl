@@ -29,7 +29,6 @@ class MlpActor(Actor):
 
         # observation
         input_dim = observation_size(ob_space)
-
         self.fc = MLP(
             config,
             input_dim,
@@ -76,7 +75,6 @@ class MlpActor(Actor):
         inp = list(ob.values())
         if len(inp[0].shape) == 1:
             inp = [x.unsqueeze(0) for x in inp]
-
         out = self._activation_fn(self.fc(torch.cat(inp, dim=-1)))
         out = torch.reshape(out, (out.shape[0], -1))
 

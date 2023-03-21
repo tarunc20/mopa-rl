@@ -140,9 +140,12 @@ if __name__ == "__main__":
         from config.pusher import add_arguments
     elif "Sawyer" in args.env:
         from config.sawyer import add_arguments
+    elif "Cheetah" in args.env:
+        pass
+    elif args.env == "Lift":
+        from config.sawyer import add_arguments
     else:
         raise ValueError("args.env (%s) is not supported" % args.env)
-
     add_arguments(parser)
     mp_add_arguments(parser)
     args, unparsed = parser.parse_known_args()

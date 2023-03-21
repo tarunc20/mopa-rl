@@ -42,7 +42,10 @@ class RolloutRunner(object):
         self._env = env
         self._env_eval = env_eval
         self._pi = pi
-        self._ik_env = gym.make(config.env, **config.__dict__)
+        try:
+            self._ik_env = gym.make(config.env, **config.__dict__)
+        except:
+            self._ik_env = None
 
     def run(
         self,
@@ -79,6 +82,14 @@ class RolloutRunner(object):
             ep_len = 0
             ep_rew = 0
             ob = env.reset()
+            if config.env == 'HalfCheetah-v2':
+                observation = ob.copy()
+                ob = OrderedDict()
+                ob['default'] = observation
+            elif config.env == "Lift":
+                observation = ob.copy()
+                ob = OrderedDict()
+                ob['default'] = np.concatenate([observation['robot0_proprio-state'], observation['object-state']])
             if config.use_ik_target:
                 ik_env.reset()
             # run rollout
@@ -132,12 +143,22 @@ class RolloutRunner(object):
                             {"done": done, "rew": meta_rew, "intra_steps": intra_steps}
                         )
                     else:
-                        ob, reward, done, info = env.step(ac)
+                        if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+                            ob, reward, done, info = env.step(ac)
+                        else:
+                            observation, reward, done, info = env.step(ac['default'])
+                            ob = OrderedDict()
+                            if config.env == "HalfCheetah-v2":
+                                ob['default'] = observation 
+                            else:
+                                ob['default'] = np.concatenate([observation['robot0_proprio-state'], observation['object-state']])
                         rollout.add({"done": done, "rew": reward})
+                        env_step += 1
                         ep_len += 1
                         step += 1
-                        env_step += 1
                         ep_rew += reward
+                        info['reward'] = reward
+                        info['success'] = int(env._check_success())
                         reward_info.add(info)
                 if every_steps is not None and step % every_steps == 0:
                     # last frame
@@ -157,7 +178,6 @@ class RolloutRunner(object):
                     if not "qpos" in k and np.isscalar(v)
                 },
             )
-
             episode += 1
 
     def run_episode(
@@ -177,11 +197,23 @@ class RolloutRunner(object):
         ep_len = 0
         ep_rew = 0
         ob = env.reset()
+        if config.env == 'HalfCheetah-v2':
+            observation = ob.copy()
+            ob = OrderedDict()
+            ob['default'] = observation
+        elif config.env == "Lift":
+            observation = ob.copy()
+            ob = OrderedDict()
+            ob['default'] = np.concatenate([observation['robot0_proprio-state'], observation['object-state']]) 
+        if config.env == 'HalfCheetah-v2' or config.env == "Lift":
+            env._episode_length = 0
+            env._episode_reward = 0
         if config.use_ik_target:
             ik_env.reset()
         self._record_frames = []
         if record:
             self._store_frame(env)
+
 
         # buffer to save qpos
         saved_qpos = []
@@ -189,6 +221,7 @@ class RolloutRunner(object):
         # run rollout
         meta_ac = None
         total_contact_force = 0.0
+        contact_force = 0.0
         while not done and ep_len < max_step:
 
             ll_ob = ob.copy()
@@ -226,10 +259,13 @@ class RolloutRunner(object):
                         ob, reward, done, info = env.step(inter_ac)
                         ep_len += 1
                         ep_rew += reward
+                        if config.env == 'HalfCheetah-v2' or config.env == "Lift":
+                            env._episode_length += 1
+                            env._episode_reward += reward
                         meta_rew += reward * config.discount_factor ** j
                         reward_info.add(info)
-                        contact_force = env.get_contact_force()
-                        total_contact_force += contact_force
+                        #contact_force = env.get_contact_force()
+                        #total_contact_force += contact_force
                         if record:
                             frame_info = info.copy()
                             frame_info["ac"] = ac["default"]
@@ -246,14 +282,27 @@ class RolloutRunner(object):
                         {"done": done, "rew": meta_rew, "intra_steps": intra_steps}
                     )
                 else:
-                    ob, reward, done, info = env.step(ac)
+                    if config.env != 'HalfCheetah-v2' and config.env != "Lift":
+                        ob, reward, done, info = env.step(ac)
+                    else:
+                        observation, reward, done, info = env.step(ac['default'])
+                        ob = OrderedDict()
+                        if config.env == "HalfCheetah-v2":
+                            ob['default'] = observation 
+                        else:
+                            ob['default'] = np.concatenate([observation['robot0_proprio-state'], observation['object-state']])
+                        info['reward'] = reward
+                        info['success'] = int(env._check_success())
                     rollout.add({"done": done, "rew": reward})
                     ep_len += 1
                     ep_rew += reward
+                    if config.env == 'HalfCheetah-v2' or config.env == "Lift":
+                        env._episode_length += 1
+                        env._episode_reward += reward
                     reward_info.add(info)
 
-                contact_force = env.get_contact_force()
-                total_contact_force += contact_force
+                #contact_force = env.get_contact_force()
+                #total_contact_force += contact_force
 
                 if record and not config.expand_ac_space:
                     frame_info = info.copy()
@@ -268,7 +317,8 @@ class RolloutRunner(object):
         # last frame
         ll_ob = ob.copy()
         rollout.add({"ob": ll_ob, "meta_ac": meta_ac})
-
+        # add for 
+        print(f"Env episode length: {env._episode_length}")
         ep_info.add(
             {
                 "len": ep_len,
@@ -332,10 +382,13 @@ class RolloutRunner(object):
 
     def _store_frame(self, env, info={}):
         color = (200, 200, 200)
-
         text = "{:4} {}".format(env._episode_length, env._episode_reward)
 
-        frame = env.render("rgb_array") * 255.0
+        if self._config.env != "Lift":
+            frame = env.render("rgb_array") * 255.0
+        else:
+            frame = env._get_observations()['image-state']
+            frame = np.flipud(frame)
 
         if self._config.vis_info:
             fheight, fwidth = frame.shape[:2]

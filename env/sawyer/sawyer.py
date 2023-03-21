@@ -136,6 +136,7 @@ class SawyerEnv(BaseEnv):
 
     @property
     def manipulation_geom_ids(self):
+        # this is an empty list
         return [self.sim.model.geom_name2id(name) for name in self.manipulation_geom]
 
     def _get_reference(self):
@@ -352,7 +353,6 @@ class SawyerEnv(BaseEnv):
 
         if self._i_term is None:
             self._i_term = np.zeros_like(self.mujoco_robot.dof)
-
         if is_planner:
             rescaled_ac = action[: self.robot_dof]
         else:
