@@ -124,7 +124,7 @@ class Lift():
             ],
             "position_limits": None,
             "ramp_ratio": 0.2,
-            "type": "JOINT_POSITION",
+            "type": "OSC_POSE",
             "uncouple_pos_ori": True
             },
             "env_name": "Lift",
@@ -394,7 +394,7 @@ def make_standard_environment():
             ],
             "position_limits": None,
             "ramp_ratio": 0.2,
-            "type": "JOINT_POSITION",
+            "type": "OSC_POSE",
             "uncouple_pos_ori": True
             },
             "env_name": "Lift",

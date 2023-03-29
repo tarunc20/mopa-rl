@@ -178,6 +178,9 @@ class RolloutRunner(object):
                     if not "qpos" in k and np.isscalar(v)
                 },
             )
+            logger.info(
+                f"Ep {episode} length: {ep_len}"
+            )
             episode += 1
 
     def run_episode(

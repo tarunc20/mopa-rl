@@ -127,11 +127,11 @@ class Trainer(object):
         except:
             pass
         config.nq = self._env.sim.model.nq
-        # fix this for half cheetah
-        try:
+        try: # case of half cheetah environment
             ob_space = self._env.observation_space
             ac_space = self._env.action_space
         except: # case of Lift environment
+            # use gym wrapper rlkit 
             true_ob_space = spaces.Box(low=-1*np.ones(42), high=np.ones(42))
             true_ac_space = spaces.Box(low=-1*np.ones(7), high=np.ones(7))
             ob_space = spaces.Dict({'default': true_ob_space})
@@ -455,6 +455,7 @@ class Trainer(object):
                     ep_info = defaultdict(list)
 
                 ## Evaluate both MP and RL
+                #config.evaluate_interval = 1000
                 if update_iter % config.evaluate_interval == 0:
                     logger.info("Evaluate at %d", update_iter)
                     obs = None
